@@ -1,178 +1,21 @@
 
+#╔════════════════════════════════════════════════════════════════════════════════╗
+#║                                                                                ║
+#║   EncodeDecode.ps1                                                             ║
+#║                                                                                ║
+#╟────────────────────────────────────────────────────────────────────────────────╢
+#║   Guillaume Plante <codegp@icloud.com>                                         ║
+#║   Code licensed under the GNU GPL v3.0. See the LICENSE file for details.      ║
+#╚════════════════════════════════════════════════════════════════════════════════╝
+
+. "$PSScriptRoot\FileHeader.ps1"
+
 function Invoke-AutoUpdateProgress_FileUtils {
     [int32]$PercentComplete = (($Script:StepNumber / $Script:TotalSteps) * 100)
     if ($PercentComplete -gt 100) { $PercentComplete = 100 }
     Write-Progress -Activity $Script:ProgressTitle -Status $Script:ProgressMessage -PercentComplete $PercentComplete
     if ($Script:StepNumber -lt $Script:TotalSteps) { $Script:StepNumber++ }
 }
-
-
-function Read-FileHeader {
-    [CmdletBinding()]
-    param(
-        [Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true, HelpMessage = 'Path to the file with header')]
-        [ValidateScript({ Test-Path $_ -PathType 'Leaf' })]
-        [string]$Path
-    )
-
-    process {
-        $ExpectedMagic = [byte[]](0x42, 0x4D, 0x57, 0x21, 0x2A, 0x4D, 0x53, 0x47)
-
-        $Reader = [System.IO.BinaryReader]::new([System.IO.File]::OpenRead($Path))
-        try {
-            $MagicStart = $Reader.ReadBytes(8)
-            if (-not [System.Linq.Enumerable]::SequenceEqual($MagicStart, $ExpectedMagic)) {
-                throw "Invalid or missing header magic number at start of file: $Path"
-            }
-
-            $PartID = $Reader.ReadInt32()
-            $DataSize = $Reader.ReadInt64()
-            $HashBytes = $Reader.ReadBytes(32)
-
-            $MagicEnd = $Reader.ReadBytes(8)
-            if (-not [System.Linq.Enumerable]::SequenceEqual($MagicEnd, $ExpectedMagic)) {
-                throw "Invalid or missing header magic number at end of header: $Path"
-            }
-        }
-        finally {
-            $Reader.Close()
-        }
-
-        [pscustomobject]@{
-            Path = $Path
-            PartID = $PartID
-            DataSize = $DataSize
-            Hash = ([BitConverter]::ToString($HashBytes) -replace '-', '').ToLower()
-        }
-    }
-}
-
-function Invoke-AesCrypter {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [Parameter(Position = 0, Mandatory = $true, HelpMessage = "Path to the folder containing split parts")]
-        [string]$Path,
-        [Parameter(Position = 1, Mandatory = $true, HelpMessage = "Path of the recombined file")]
-        [ValidateSet('encrypt', 'decrypt')]
-        [string]$Mode
-    )
-
-    try {
-        $LitteralPath = (Resolve-Path $Path).Path
-
-        $AesCrypterExe = Find-program "AesCrypter" -PathOnly
-        if ($Mode -eq 'encrypt') {
-            & "$AesCrypterExe" '-e' "$LitteralPath"
-
-        }elseif ($Mode -eq 'decrypt') {
-            & "$AesCrypterExe" '-d' "$LitteralPath"
-        }
-    } catch {
-        Write-Error "Error"
-    }
-}
-
-
-function Remove-FileHeader {
-    [CmdletBinding()]
-    param(
-        [Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true, HelpMessage = 'Path to the file with header')]
-        [ValidateScript({ Test-Path $_ -PathType 'Leaf' })]
-        [string]$Path
-    )
-
-    process {
-        $Magic = [byte[]](0x42, 0x4D, 0x57, 0x21, 0x2A, 0x4D, 0x53, 0x47) # BMW!*MSG
-        $LitteralPath = (Resolve-Path $Path).Path
-        $TempPath = "$LitteralPath.raw"
-
-        $Reader = [System.IO.BinaryReader]::new([System.IO.File]::OpenRead($LitteralPath))
-        try {
-            # Read and validate start magic number
-            $MagicStart = $Reader.ReadBytes(8)
-            if (-not [System.Linq.Enumerable]::SequenceEqual($MagicStart, $Magic)) {
-                throw "Invalid or missing header magic number at start of file: $LitteralPath"
-            }
-
-            # Read header
-            $PartID = $Reader.ReadInt32()
-            $DataSize = $Reader.ReadInt64()
-            $HashBytes = $Reader.ReadBytes(32)
-
-            # Read and validate end magic number
-            $MagicEnd = $Reader.ReadBytes(8)
-            if (-not [System.Linq.Enumerable]::SequenceEqual($MagicEnd, $Magic)) {
-                throw "Invalid or missing header magic number at end of header: $LitteralPath"
-            }
-
-            # Read actual data
-            $RemainingBytes = $Reader.ReadBytes([int]$DataSize)
-
-            # Write payload to new file
-            $Writer = [System.IO.BinaryWriter]::new([System.IO.File]::Create($TempPath))
-            try {
-                $Writer.Write($RemainingBytes, 0, $RemainingBytes.Length)
-            }
-            finally {
-                $Writer.Close()
-            }
-        }
-        finally {
-            $Reader.Close()
-        }
-
-        # Replace the original file with headerless copy
-        Remove-Item -LiteralPath $LitteralPath -Force
-        Rename-Item -LiteralPath $TempPath -NewName (Split-Path $LitteralPath -Leaf)
-
-        # Return metadata object
-        return [pscustomobject]@{
-            Path = $LitteralPath
-            PartID = $PartID
-            DataSize = $DataSize
-            Hash = ([BitConverter]::ToString($HashBytes) -replace '-', '').ToLower()
-        }
-    }
-}
-
-function Write-FileHeader {
-    [CmdletBinding()]
-    param(
-        [Parameter(Position = 0, ValueFromPipeline = $true, Mandatory = $true, HelpMessage = 'Path to the file to add header to')]
-        [ValidateScript({ Test-Path $_ -PathType 'Leaf' })]
-        [string]$Path,
-
-        [Parameter(Mandatory = $true)]
-        [int]$PartID
-    )
-
-    process {
-        $Magic = [byte[]](0x42, 0x4D, 0x57, 0x21, 0x2A, 0x4D, 0x53, 0x47) # BMW!*MSG
-        $Bytes = [System.IO.File]::ReadAllBytes($Path)
-        $DataSize = $Bytes.Length
-        $Hasher = [System.Security.Cryptography.SHA256]::Create()
-        $HashBytes = $Hasher.ComputeHash($Bytes)
-
-        $TempPath = "$Path.tmp"
-        $Writer = [System.IO.BinaryWriter]::new([System.IO.File]::Create($TempPath))
-
-        try {
-            $Writer.Write($Magic)
-            $Writer.Write([int]$PartID)
-            $Writer.Write([long]$DataSize)
-            $Writer.Write($HashBytes)
-            $Writer.Write($Magic)
-            $Writer.Write($Bytes, 0, $DataSize)
-        }
-        finally {
-            $Writer.Close()
-        }
-
-        Remove-Item -LiteralPath $Path -Force
-        Rename-Item -LiteralPath $TempPath -NewName (Split-Path $Path -Leaf)
-    }
-}
-
 
 
 function Sort-Lexically {
@@ -205,6 +48,7 @@ function Sort-Lexically {
         }
     }
 }
+
 function Sort-ByFileHeaderId {
     [CmdletBinding()]
     param(
@@ -351,6 +195,7 @@ function Invoke-SplitDataFile {
 }
 
 
+
 function Invoke-CombineSplitFiles {
 
     [CmdletBinding(SupportsShouldProcess = $true)]
@@ -359,9 +204,11 @@ function Invoke-CombineSplitFiles {
         [string]$Path,
         [Parameter(Position = 1, Mandatory = $true, HelpMessage = "Path of the recombined file")]
         [string]$Destination,
-        [Parameter(Mandatory = $false)]
-        [switch]$AsString
+        [Parameter(Mandatory = $false, HelpMessage = "Encoding type")]
+        [ValidateSet('base64','raw')]
+        [string]$Type='base64'
     )
+    [bool]$EncodedAsString = ($Type -eq 'base64')
 
     $SyncStopWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $Script:ProgressTitle = "Combine Split Files"
@@ -371,35 +218,34 @@ function Invoke-CombineSplitFiles {
     $Path = $Path.TrimEnd('\')
     Write-Verbose "Path is $Path"
 
-    # Identify the base name
-    foreach ($f in (Get-ChildItem $Path -File).Name) {
-        if ($f -like '*01.cpp') {
-            $Basename = $f -replace '01\.cpp$', ''
-            break
-        }
+    $Files = (Get-ChildItem $Path -File -Filter "$Basename*.cpp").FullName
+    try{
+       $SortedFiles = $Files | Sort-ByFileHeaderId
+    }catch{
+        Write-Error "$_"
     }
-
-    Write-Verbose "Basename is $Basename"
-
-    $Files = (Get-ChildItem $Path -File -Filter "$Basename*.cpp").FullName | Sort-ByFileHeaderId
-    $FilesCount = $Files.Count
+    $FilesCount = $SortedFiles.Count
     $Script:TotalSteps = $FilesCount
     $Script:StepNumber = 1
+
+    if(![System.IO.File]::Exists("$Destination")){
+        New-Item -Path "$Destination" -ItemType File -FOrce -ErrorAction Ignore | Out-Null
+    }
 
     # Open file stream for output
     $FileStream = [System.IO.File]::Open($Destination, 'Create', 'Write', 'Write') # for writing
 
+    [bool]$RecombinedSuccessfully = $True
+
     try {
-        foreach ($f in $Files) {
+        foreach ($f in $SortedFiles) {
             if (-not (Test-Path -Path $f)) {
-                Write-Verbose "Skipping missing file: $f"
-                continue
+                throw "missing file: $f"
             }
 
             $HeaderData = Remove-FileHeader -Path $f
 
-
-            if ($AsString) {
+            if ($EncodedAsString) {
                 [string]$Base64String = Get-Content -LiteralPath $f -Raw
                 [byte[]]$ReadBytes = [Convert]::FromBase64String($Base64String)
                 $FileStream.Write($ReadBytes, 0, $ReadBytes.Length)
@@ -410,15 +256,17 @@ function Invoke-CombineSplitFiles {
 
             $Script:ProgressMessage = "Wrote part $Script:StepNumber of $Script:TotalSteps"
             Invoke-AutoUpdateProgress_FileUtils
-
         }
-    }
-    finally {
+    }catch{
+        $RecombinedSuccessfully = $False
+        Write-Error "Error on $f . $_"
+    }finally {
         $FileStream.Close()
     }
 
-    Invoke-AesCrypter -Path "$Destination" -Mode 'decrypt'
-
-    Write-Host "Wrote combined file to $Destination"
+    if($RecombinedSuccessfully){
+        Write-Host "Recombined Successfully ! Wrote combined file to $Destination"
+    }
+  
 }
 
