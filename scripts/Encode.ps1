@@ -1,4 +1,5 @@
 
+. "$PSScriptRoot\Invoke-AesCrypter.ps1"
 . "$PSScriptRoot\EncodeDecode.ps1"
 
 function Invoke-DoEncode {

@@ -140,7 +140,7 @@ function Invoke-SplitDataFile {
 
     do {
         $Extension = $Extension.TrimStart('.')
-        $NEWNAME = "{0}\{1}{2,2:00}.{3}" -f $OutPath, $FILENAME, $NUMFILE, $Extension
+        $NEWNAME = "{0}\{1}{2:d4}.{3}" -f $OutPath, $FILENAME, $NUMFILE, $Extension
         $Script:ProgressMessage = "Split {0} of {1} files" -f $Script:StepNumber, $Script:TotalSteps
         Invoke-AutoUpdateProgress_FileUtils
         $Script:StepNumber++
