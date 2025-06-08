@@ -105,8 +105,15 @@ Here's a breakdown of each tool and its function:
 5. **WinKFP** – Update module firmware if needed.
 6. **BMW Coding Tool** – Keep everything up to date.
 
+---
 
 ![toolsflow](flow.png)
+
+---
+
+## TO Program a New Key
+
+Read [this](Key.md)
 
 ## Encode and Decode Packages
 
